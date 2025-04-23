@@ -1,0 +1,635 @@
+/*-------------------------------------------------
+  RIGHT PANEL
+--------------------------------------------------*/
+#rightpanel {
+  width: 400px;
+  background: var(--sidebar-bg-color);
+  color: var(--text-color);
+  border-left: 1px solid var(--sidebar-border-color);
+  transition: width var(--transition-speed) ease;
+  overflow-y: auto;
+  position: relative;
+}
+
+/* Collapsed state (if you want toggle behavior similar to the left panel) */
+#rightpanel.collapsed {
+  width: 50px;
+  overflow: visible;
+}
+#rightpanel.collapsed .right-section,
+#rightpanel.collapsed h3 {
+  display: none;
+}
+
+/* Right panel sections */
+.right-section {
+  padding: 10px 15px;
+  border-bottom: 1px solid var(--sidebar-border-color);
+}
+
+/* Scrollbar styling for right panel */
+#rightpanel::-webkit-scrollbar {
+  width: 8px;
+}
+#rightpanel::-webkit-scrollbar-track {
+  background: var(--sidebar-bg-color);
+}
+#rightpanel::-webkit-scrollbar-thumb {
+  background-color: var(--border-color);
+  border-radius: 4px;
+}
+
+/* Right panel section headers (match the left panel) */
+#rightpanel h3 {
+  margin: 10px 0;
+  font-size: 1em;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  display: flex;
+  align-items: center;
+}
+#rightpanel h3::before {
+  content: "";
+  display: inline-block;
+  width: 6px;
+  height: 6px;
+  background-color: var(--accent-color);
+  border-radius: 50%;
+  margin-right: 8px;
+}
+
+/* Sampling select styling */
+#samplingSelect {
+  width: 100%;
+  background: var(--sidebar-bg-color);
+  color: var(--text-color);
+  border: 1px solid var(--border-color);
+  border-radius: 4px;
+  padding: 5px;
+  margin-top: 5px;
+}
+
+/*-------------------------------------------------
+  Basic Dark Theme with CSS Variables
+--------------------------------------------------*/
+:root {
+  --bg-color: #1e1e1e;
+  --sidebar-bg-color: #2d2d2d;
+  --sidebar-border-color: #404040;
+  --text-color: #e0e0e0;
+  --accent-color: #0e639c;
+  --assistant-bg: #3c3c3c;
+  --user-bg: #0e639c;
+  --hover-bg: #1177bb;
+  --border-color: #444;
+  --error-color: #f44747;
+  --font-family: "Segoe UI", Tahoma, Geneva, Verdana, sans-serif;
+  --transition-speed: 0.3s;
+}
+
+/*-------------------------------------------------
+  GLOBAL STYLES
+--------------------------------------------------*/
+* {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+html, body {
+  height: 100%;
+}
+body {
+  font-family: var(--font-family);
+  background: var(--bg-color);
+  color: var(--text-color);
+  overflow: hidden; /* helps maintain full-height layout */
+}
+
+/*-------------------------------------------------
+  MAIN LAYOUT
+--------------------------------------------------*/
+#app {
+  display: flex;
+  height: 100vh;
+  overflow: hidden;
+}
+
+/*-------------------------------------------------
+  SIDEBAR
+--------------------------------------------------*/
+/*------------------------------------------
+  Resources Table Styling
+-------------------------------------------*/
+#resources {
+  /* If you want consistent spacing, keep your existing styles here */
+  padding: 10px 15px;
+  border-bottom: 1px solid var(--sidebar-border-color);
+}
+
+#resourcesTable {
+  width: 100%;
+  border-collapse: collapse;
+  table-layout: fixed; /* required for truncated ellipsis to work */
+}
+
+#resourcesTable thead th {
+  text-align: left;
+  font-weight: normal;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  background-color: var(--sidebar-bg-color);
+  border-bottom: 1px solid var(--sidebar-border-color);
+  padding: 8px;
+}
+
+/* Basic cell styles for both header and body */
+#resourcesTable th,
+#resourcesTable td {
+  padding: 8px;
+  border-bottom: 1px solid var(--sidebar-border-color);
+  color: var(--text-color);
+}
+
+/* Set column widths and truncate long text in the name column */
+.col-active {
+  width: 70px; 
+  text-align: center;
+  /* If the "Active" column is just a checkbox, 70px is typically enough */
+}
+
+.col-cache {
+  width: 100px;
+  text-align: center;
+  /* This column is a bit wider to hold the toggle or second checkbox */
+}
+
+.col-name {
+  /* Allow the name column to grow, but no wrapping */
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  /* 
+    Because table-layout: fixed is on #resourcesTable,
+    the column will use remaining space. If it's still too long
+    it will display an ellipsis instead of wrapping.
+  */
+}
+
+#sidebar {
+  width: 400px;
+  background: var(--sidebar-bg-color);
+  color: var(--text-color);
+  transition: width var(--transition-speed) ease;
+  overflow-y: auto;
+  border-right: 1px solid var(--sidebar-border-color);
+  position: relative;
+}
+#sidebar.collapsed {
+  width: 50px;
+  overflow: visible;
+}
+
+/* Sidebar toggle button */
+#toggleSidebar {
+  background: none;
+  border: none;
+  color: var(--text-color);
+  font-size: 1.5em;
+  padding: 10px;
+  cursor: pointer;
+  width: 100%;
+  text-align: left;
+}
+#toggleSidebar:hover {
+  background-color: rgba(255,255,255,0.1);
+}
+/* Right panel toggle button */
+#toggleRightpanel {
+  background: none;
+  border: none;
+  color: var(--text-color);
+  font-size: 1.5em;
+  padding: 10px;
+  cursor: pointer;
+  width: 100%;
+  text-align: left;
+}
+#toggleRightpanel:hover {
+  background-color: rgba(255,255,255,0.1);
+}
+
+/* Hide sections when collapsed */
+#sidebar.collapsed .sidebar-section,
+#sidebar.collapsed h3 {
+  display: none;
+}
+
+/* Scroll styling */
+#sidebar::-webkit-scrollbar {
+  width: 8px;
+}
+#sidebar::-webkit-scrollbar-track {
+  background: var(--sidebar-bg-color);
+}
+#sidebar::-webkit-scrollbar-thumb {
+  background-color: var(--border-color);
+  border-radius: 4px;
+}
+
+/*-------------------------------------------------
+  SIDEBAR SECTIONS
+--------------------------------------------------*/
+.sidebar-section {
+  padding: 10px 15px;
+  border-bottom: 1px solid var(--sidebar-border-color);
+}
+
+/* Section headings */
+#sidebar h3 {
+  margin: 10px 0;
+  font-size: 1em;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  display: flex;
+  align-items: center;
+}
+#sidebar h3::before {
+  content: "";
+  display: inline-block;
+  width: 6px;
+  height: 6px;
+  background-color: var(--accent-color);
+  border-radius: 50%;
+  margin-right: 8px;
+}
+
+/* Model selector */
+#modelSelect {
+  width: 100%;
+  margin-bottom: 10px;
+  background: var(--sidebar-bg-color);
+  color: var(--text-color);
+  border: 1px solid var(--border-color);
+  border-radius: 4px;
+  padding: 5px;
+}
+
+/* Prompts & templates sections */
+#promptSelect, #templateSelect {
+  width: 100%;
+  background: var(--sidebar-bg-color);
+  color: var(--text-color);
+  border: 1px solid var(--border-color);
+  border-radius: 4px;
+  padding: 5px;
+  margin-top: 5px;
+}
+#promptArgsForm, #selectedTemplates {
+  margin-top: 10px;
+}
+
+/* Add template button */
+#addTemplateBtn {
+  background: var(--accent-color);
+  color: #fff;
+  border: none;
+  padding: 4px 8px;
+  border-radius: 4px;
+  cursor: pointer;
+  font-size: 0.9em;
+  margin-left: 5px;
+}
+#addTemplateBtn:hover {
+  background: var(--hover-bg);
+}
+
+/* Tasks list */
+#tasksList {
+  margin-top: 5px;
+}
+
+/*-------------------------------------------------
+  CHAT AREA
+--------------------------------------------------*/
+#chat {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-width: 320px; /* ensure chat area remains visible */
+}
+
+/* Messages Container */
+#messages {
+  flex: 1;
+  padding: 10px;
+  overflow-y: auto;
+  background: #252526;
+  border-bottom: 1px solid var(--border-color);
+  position: relative;
+}
+#messages p {
+  margin: 6px 0;
+  line-height: 1.4;
+  word-wrap: break-word;
+  white-space: pre-wrap;
+  max-width: 100%;
+  padding: 8px 12px;
+  border-radius: 6px;
+  position: relative;
+}
+
+/* Scrollbar customization */
+#messages::-webkit-scrollbar {
+  width: 8px;
+}
+#messages::-webkit-scrollbar-track {
+  background: #252526;
+}
+#messages::-webkit-scrollbar-thumb {
+  background-color: var(--border-color);
+  border-radius: 4px;
+}
+
+/* User messages */
+p.user {
+  margin-left: auto;
+  margin-right: 0;
+  background: var(--user-bg);
+  color: #fff;
+  border-bottom-right-radius: 0;
+  text-align: right;
+}
+p.user::after {
+  content: "";
+  position: absolute;
+  right: -8px;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 0;
+  height: 0;
+  border: 6px solid transparent;
+  border-left-color: var(--user-bg);
+  border-right: 0;
+  margin-top: -6px;
+}
+
+/* Assistant messages */
+p.assistant {
+  margin-right: auto;
+  margin-left: 0;
+  background: var(--assistant-bg);
+  color: #9cdcfe;
+  border-bottom-left-radius: 0;
+  text-align: left;
+}
+p.assistant::after {
+  content: "";
+  position: absolute;
+  left: -8px;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 0;
+  height: 0;
+  border: 6px solid transparent;
+  border-right-color: var(--assistant-bg);
+  border-left: 0;
+  margin-top: -6px;
+}
+
+/* Error messages */
+p.error {
+  margin: 10px auto;
+  text-align: center;
+  color: var(--error-color);
+  background: transparent;
+  border: none;
+}
+
+/* Info messages */
+p.info {
+  margin: 10px auto;
+  text-align: center;
+  color: #c5c5c5;
+  font-style: italic;
+  background: transparent;
+  border: none;
+}
+
+/*-------------------------------------------------
+  MESSAGE INPUT
+--------------------------------------------------*/
+#input {
+  display: flex;
+  padding: 10px;
+  border-top: 1px solid var(--border-color);
+  background: var(--bg-color);
+}
+#messageInput {
+  flex: 1;
+  resize: none;
+  padding: 10px;
+  background: var(--sidebar-bg-color);
+  color: var(--text-color);
+  border: 1px solid var(--border-color);
+  border-radius: 4px;
+  font-family: var(--font-family);
+}
+#messageInput:focus {
+  outline: 1px solid var(--accent-color);
+}
+#sendBtn {
+  margin-left: 10px;
+  background: var(--accent-color);
+  color: #fff;
+  border: none;
+  padding: 0 20px;
+  border-radius: 4px;
+  cursor: pointer;
+  transition: background var(--transition-speed) ease;
+}
+#sendBtn:hover {
+  background: var(--hover-bg);
+}
+
+/*-------------------------------------------------
+  TOGGLE SWITCH
+--------------------------------------------------*/
+.switch {
+  position: relative;
+  display: inline-block;
+  width: 40px;
+  height: 20px;
+  margin-right: 10px;
+}
+.switch input {
+  opacity: 0;
+  width: 0;
+  height: 0;
+}
+.use-cached {
+  margin-left: 0.5em;
+}
+.use-cached:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+.slider {
+  position: absolute;
+  cursor: pointer;
+  top: 0; left: 0; right: 0; bottom: 0;
+  background-color: #ccc;
+  transition: .4s;
+  border-radius: 20px;
+}
+.slider:before {
+  position: absolute;
+  content: "";
+  height: 14px;
+  width: 14px;
+  left: 3px;
+  bottom: 3px;
+  background-color: #fff;
+  transition: .4s;
+  border-radius: 50%;
+}
+.switch input:checked + .slider {
+  background-color: var(--accent-color);
+}
+.switch input:focus + .slider {
+  box-shadow: 0 0 1px var(--accent-color);
+}
+.switch input:checked + .slider:before {
+  transform: translateX(20px);
+}
+
+/*-------------------------------------------------
+  TASKS PROGRESS BARS
+--------------------------------------------------*/
+.task-bar {
+  position: relative;
+  height: 24px;
+  background: #333;
+  margin: 6px 0;
+  border-radius: 4px;
+  cursor: pointer;
+  overflow: hidden;
+  transition: background var(--transition-speed) ease;
+}
+.task-bar.complete {
+  background: #444;
+  cursor: default;
+}
+.task-bar .fill {
+  background: var(--accent-color);
+  height: 100%;
+  width: 0%;
+  transition: width var(--transition-speed) ease;
+}
+.task-bar .label {
+  position: absolute;
+  width: 100%;
+  text-align: center;
+  line-height: 24px;
+  color: #fff;
+  font-size: 0.9em;
+  pointer-events: none;
+}
+/* Cancel icon in running task bars */
+.task-bar .task-cancel {
+  position: absolute;
+  top: 2px;
+  right: 4px;
+  width: 20px;
+  height: 20px;
+  color: #fff;
+  background: rgba(0,0,0,0.3);
+  text-align: center;
+  line-height: 20px;
+  border-radius: 50%;
+  cursor: pointer;
+  font-weight: bold;
+  z-index: 2;
+}
+.task-bar .task-cancel:hover {
+  background: rgba(255, 0, 0, 0.6);
+}
+.task-bar.complete .task-cancel {
+  display: none;
+}
+/* Tools header layout */
+.tools-header {
+  display: flex;
+  align-items: center;
+}
+.tools-header .required-switch {
+  margin-left: auto;
+}
+.tools-header .required-text {
+  margin-left: 5px;
+}
+/* Help icon for tool descriptions */
+.tool-help {
+  position: relative;
+  display: inline-block;
+  margin-left: 4px;
+  color: var(--accent-color);
+  cursor: help;
+  font-weight: bold;
+}
+/* Custom tooltip for tool descriptions */
+.tool-help .tooltip-text {
+  visibility: hidden;
+  opacity: 0;
+  background: var(--sidebar-bg-color);
+  color: var(--text-color);
+  border: 1px solid var(--border-color);
+  padding: 6px 8px;
+  border-radius: 4px;
+  white-space: nowrap;
+  position: absolute;
+  bottom: 100%;
+  left: 0;
+  transform: none;
+  z-index: 100;
+  transition: opacity 0.1s ease;
+}
+.tool-help:hover .tooltip-text {
+  visibility: visible;
+  opacity: 1;
+}
+
+/* Template controls layout */
+.template-controls {
+  display: flex;
+  align-items: center;
+  margin-top: 5px;
+}
+.template-controls select {
+  flex: 1;
+}
+.template-controls button {
+  margin-left: 5px;
+}
+
+/* Root inputs layout */
+#rootInputs {
+  display: flex;
+  align-items: center;
+  margin-top: 5px;
+}
+#rootInputs input {
+  flex: 1;
+  margin-right: 5px;
+}
+#addRootBtn {
+  background: var(--accent-color);
+  color: #fff;
+  border: none;
+  padding: 4px 8px;
+  border-radius: 4px;
+  cursor: pointer;
+  font-size: 0.9em;
+}
+#addRootBtn:hover {
+  background: var(--hover-bg);
+}

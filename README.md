@@ -1,1 +1,1 @@
-# mcp-wrangler
+# MCP-Wrangler

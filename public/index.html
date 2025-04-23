@@ -1,0 +1,117 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8">
+    <title>MCP Wrangler</title>
+    <link rel="stylesheet" href="styles.css">
+    <script src="ui.js" defer></script>
+  </head>
+  <body>
+    <div id="app">
+      <!-- SIDEBAR -->
+      <div id="sidebar">
+        <button id="toggleSidebar">☰</button>
+
+        <!-- Current Model -->
+        <h3>Current Model</h3>
+        <div class="sidebar-section">
+          <select id="modelSelect"></select>
+        </div>
+
+        <!-- Tools -->
+        <div class="sidebar-section" id="tools"></div>
+
+        <!-- Prompts -->
+        <h3>Prompts</h3>
+        <div class="sidebar-section" id="prompts">
+          <label for="promptSelect">Prompt:</label><br>
+          <select id="promptSelect">
+            <option value="">No Prompt</option>
+          </select>
+          <div id="promptArgsForm"></div>
+        </div>
+
+        <!-- Resources -->
+        <h3>Resources</h3>
+        <div class="sidebar-section" id="resources">
+          <table id="resourcesTable">
+            <thead>
+              <tr>
+                <th class="col-active">Active</th>
+                <th class="col-cache">Cached</th>
+                <th class="col-name">Name</th>
+              </tr>
+            </thead>
+            <tbody>
+              <!-- Example row -->
+              <tr>
+                <td>
+                  <input type="checkbox" checked>
+                </td>
+                <td>
+                  <input type="checkbox" class="use-cached">
+                </td>
+                <!-- Long text gets truncated with ellipsis (see CSS) -->
+                <td class="col-name" title="ExampleResourceNameThatIsQuiteLong">
+                  ExampleResourceNameThatIsQuiteLong
+                </td>
+              </tr>
+              <!-- Add more rows dynamically as needed -->
+            </tbody>
+          </table>
+        </div>
+
+        <!-- Templates -->
+        <h3>Templates</h3>
+        <div class="sidebar-section" id="templates">
+          <label for="templateSelect">Available Templates:</label><br>
+          <div class="template-controls">
+            <select id="templateSelect">
+              <option value="">-- Select template --</option>
+            </select>
+            <button id="addTemplateBtn" title="Add template">+</button>
+          </div>
+          <div id="selectedTemplates"></div>
+        </div>
+
+      </div>
+
+      <!-- CHAT AREA -->
+      <div id="chat">
+        <div id="messages">
+          <!-- Example messages -->
+          <p class="assistant">Hello! How can I help you today?</p>
+          <p class="user">I'd like to see the updated table layout.</p>
+        </div>
+        <div id="input">
+          <textarea id="messageInput" rows="3" placeholder="Type a message..."></textarea>
+          <button id="sendBtn">Send</button>
+        </div>
+      </div>
+      <!-- RIGHT PANEL -->
+      <div id="rightpanel">
+        <button id="toggleRightpanel">☰</button>
+        <h3>Sampling</h3>
+        <div class="right-section">
+          <label for="samplingSelect">Sampling Model:</label><br>
+          <select id="samplingSelect"></select>
+        </div>
+        <h3>Roots</h3>
+        <div class="right-section" id="roots">
+          <!-- Root input form -->
+          <div id="rootInputs">
+            <input type="text" id="rootNameInput" placeholder="Root Name">
+            <input type="text" id="rootUriInput" placeholder="Root URI">
+            <button id="addRootBtn" title="Add Root">+</button>
+          </div>
+          <!-- List of added roots -->
+          <ul id="rootsList"></ul>
+        </div>
+        <h3>Tasks</h3>
+        <div class="right-section" id="tasks">
+          <div id="tasksList"></div>
+        </div>
+      </div>
+    </div>
+  </body>
+</html>

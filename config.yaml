@@ -1,0 +1,6 @@
+# You can override these via environment variables
+MCP_SERVER_URL: http://demo-server:8080/sse
+OPENAI_API_KEY: sk....
+OPENAI_BASE_URL: https://api.openai.com/v1
+MODEL: gpt-4.1-nano
+SAMPLING_MODEL: gpt-4.1-nano
