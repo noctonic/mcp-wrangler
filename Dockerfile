@@ -4,7 +4,7 @@ WORKDIR /app
 
 # Install dependencies
 COPY package.json package-lock.json* ./
-RUN npm install --production
+RUN npm config set strict-ssl false && npm install --omit=dev
 
 # Copy application source
 COPY . .
