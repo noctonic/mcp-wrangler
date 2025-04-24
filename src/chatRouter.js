@@ -1,15 +1,12 @@
 /**
- * Chat orchestration: handles incoming user messages,
+ * Chat orchestration: handles incoming user input,
  * integrates MCP resources, prompts, tools, and LLM sampling.
  */
-// We now use MCP SDK client (passed via context)
 // In-memory caches for resources and templates
 const resourceCache = {};
 const templateCache = {};
-// Track which resources have been subscribed to (first-use subscriptions)
 const subscribedResources = new Set();
 
-// Invalidate resource/template caches on change notifications
 function invalidateResource(uri) {
   if (resourceCache[uri]) resourceCache[uri].stale = true;
 }
@@ -21,207 +18,143 @@ function invalidateTemplate(uri) {
  * Handle a user message and return assistant reply.
  * @param {string} message
  * @param {object} context
- * @returns {Promise<string>}
+ * @returns {Promise<{reply: string, toolCalls: Array}>}
  */
 async function handleMessage(message, context) {
-  const { mcpClient, openai, model, toolsCache, promptName, promptArgs, selectedResources, selectedTemplates } = context;
-  // 1. Use provided SDK client
+  const { mcpClient, openai, model, promptName, promptArgs, selectedResources, selectedTemplates, toolRequired } = context;
   const client = mcpClient;
-  // Initialize array to record any function calls
   const toolCalls = [];
+  const input = [];
 
-
-  // 1. Build OpenAI messages and inject selected prompt
-  const messages = [];
-    if (promptName) {
-    console.log('[Host] Prompt selected:', promptName, 'with args:', promptArgs);
+  // 1. System prompt (if any)
+  if (promptName) {
     try {
-      // Build arguments for MCP prompt call
-      const promptArguments = promptArgs || {};
-      const promptResp = await mcpClient.getPrompt({ name: promptName, arguments: promptArguments });
-      console.log('[Host] Prompt response from MCP:', promptResp);
-      let promptContent = '';
-      // New schema: some servers return { messages: [ { role, content } ] }
-      if (Array.isArray(promptResp.messages) && promptResp.messages.length > 0) {
-        const msg0 = promptResp.messages[0];
-        if (typeof msg0.content === 'string') {
-          promptContent = msg0.content;
-        } else if (msg0.content && typeof msg0.content === 'object') {
-          // If content is an object with a text field, extract it
-          if ('text' in msg0.content && typeof msg0.content.text === 'string') {
-            promptContent = msg0.content.text;
-          } else {
-            promptContent = JSON.stringify(msg0.content);
-          }
-        }
-      } else if (typeof promptResp.prompt === 'string') {
-        promptContent = promptResp.prompt;
-      } else if (promptResp.result) {
-        if (typeof promptResp.result === 'string') {
-          promptContent = promptResp.result;
-        } else if (promptResp.result && typeof promptResp.result === 'object' && typeof promptResp.result.prompt === 'string') {
-          promptContent = promptResp.result.prompt;
-        }
+      const pr = await client.getPrompt({ name: promptName, arguments: promptArgs || {} });
+
+      const msgs = pr.messages;
+
+      const first = msgs[0] ?? null;
+
+      // Pull out the actual text
+      let content =
+        first?.content?.text       ||
+        (typeof first?.content === 'string' ? first.content : undefined) ||
+        pr.prompt                  ||
+        pr.result?.prompt          ||
+        '';
+
+      if (typeof content !== 'string') {
+        content = JSON.stringify(content);
       }
-      console.log('[Host] Resolved prompt content:', promptContent);
-      if (promptContent) {
-        messages.push({ role: 'system', content: promptContent });
+      if (content) {
+        input.push({ role: 'system', content });
       }
-    } catch (err) {
-      console.error('[Host] Error fetching prompt:', err);
+    } catch (e) {
+      console.error('Failed fetching prompt:', e);
     }
   }
-  // 2. Inject selected resources as system messages (with caching)
+
+
+  // 2. Inject resources
   if (Array.isArray(selectedResources)) {
     for (const { uri, useCached } of selectedResources) {
       try {
-        let content;
+        let c;
         if (useCached && resourceCache[uri] && !resourceCache[uri].stale) {
-          content = resourceCache[uri].content;
+          c = resourceCache[uri].content;
         } else {
-          // Read fresh resource and cache it
-          const resp = await client.readResource({ uri });
-          content = resp.contents || resp.result || '';
-          resourceCache[uri] = { content, stale: false };
-          // Subscribe to resource updates on first use
-          try {
-            const serverCaps = client.getServerCapabilities();
-            if (serverCaps.resources?.subscribe && !subscribedResources.has(uri)) {
-              subscribedResources.add(uri);
-              await client.subscribeResource({ uri });
-              console.log('[Host] Subscribed to resource:', uri);
-            }
-          } catch (subErr) {
-            console.error('[Host] Error subscribing to resource:', uri, subErr);
+          const r = await client.readResource({ uri });
+          c = r.contents || r.result || '';
+          resourceCache[uri] = { content: c, stale: false };
+          if (client.getServerCapabilities()?.resources?.subscribe && !subscribedResources.has(uri)) {
+            await client.subscribeResource({ uri });
+            subscribedResources.add(uri);
           }
         }
-        messages.push({
-          role: 'system',
-          content: `Resource (${uri}): ${typeof content === 'string' ? content : JSON.stringify(content)}`
-        });
-      } catch (err) {
-        console.error('[Host] Error reading resource:', uri, err);
+        const txt = typeof c === 'string' ? c : JSON.stringify(c);
+        input.push({ role: 'system', content: `Resource (${uri}): ${txt}` });
+      } catch (e) {
+        console.error('Error reading resource', uri, e);
       }
     }
   }
-  // 3. Inject selected templates as system messages (always fresh)
+
+  // 3. Inject templates
   if (Array.isArray(selectedTemplates)) {
     for (const { uri, args } of selectedTemplates) {
       try {
-        const resp = await client.readResource({ uri, arguments: args || {} });
-        const content = resp.contents || resp.result || '';
-        messages.push({
-          role: 'system',
-          content: `Template (${uri}): ${typeof content === 'string' ? content : JSON.stringify(content)}`
-        });
-      } catch (err) {
-        console.error('[Host] Error reading template:', uri, err);
+        const r = await client.readResource({ uri, arguments: args || {} });
+        const tpl = r.contents || r.result || '';
+        const txt = typeof tpl === 'string' ? tpl : JSON.stringify(tpl);
+        input.push({ role: 'system', content: `Template (${uri}): ${txt}` });
+      } catch (e) {
+        console.error('Error reading template', uri, e);
       }
     }
   }
-  // 4. Add the user message
-  messages.push({ role: 'user', content: message });
 
-  // Determine function definitions: use requestedTools override or fetch from SDK
-  let functions = [];
-  if (Array.isArray(context.requestedTools)) {
-    // requestedTools from UI: [{ type, function: { name, description, parameters } }, ...]
-    functions = context.requestedTools
-      .filter(t => t.type === 'function')
-      .map(t => ({
-        name: t.function.name,
-        description: t.function.description,
-        parameters: t.function.parameters
-      }));
-    console.log('[Host] Using requested functions from UI:', functions.map(f => f.name));
-  } else {
+  // 4. User message
+  input.push({ role: 'user', content: message });
+
+  // 5. Tools
+  const { getEnabledTools } = require('./mcpClient');
+  const tools = getEnabledTools();
+  console.log('Enabled tools:', tools.map(t => t.name));
+
+  // 6. Build payload
+  const payload = { model, input };
+  if (tools.length) {
+    payload.tools = tools;
+    if (toolRequired) payload.tool_choice = 'required';
+  }
+  console.log('Calling OpenAI with payload', payload);
+
+  // Helper: call the responses endpoint
+  async function callOpenAI(p) {
     try {
-      const tl = await client.listTools();
-      const allTools = Array.isArray(tl.tools) ? tl.tools : tl.result?.tools || [];
-      functions = allTools
-        .filter(t => toolsCache.find(ct => ct.name === t.name && ct.enabled))
-        .map(t => ({
-          name: t.name,
-          description: t.description,
-          parameters: t.inputSchema
-        }));
-      console.log('[Host] Passing functions to LLM:', functions.map(f => f.name));
+      return await openai.responses.create(p);
     } catch (err) {
-      console.error('[Host] Failed to list tools from SDK:', err);
+      console.error('OpenAI API error:', err);
+      throw err;
     }
   }
 
-  // 4. Build userPayload (tools/tool_choice) for logging, and aiPayload (functions/function_call) for LLM
-  const userPayload = { model, messages };
-  if (functions.length > 0) {
-    userPayload.tools = functions.map(fn => ({ type: 'function', function: fn }));
-    userPayload.tool_choice = context.toolRequired ? 'required' : 'auto';
-  }
-  // Log user-facing payload
-  try {
-    console.log('[Host] LLM request payload:', JSON.stringify(userPayload, null, 2));
-  } catch {
-    console.log('[Host] LLM request payload:', userPayload);
-  }
-  // Build payload for OpenAI SDK
-  const aiPayload = { model, messages };
-  if (functions.length > 0) {
-    aiPayload.functions = functions;
-    aiPayload.function_call = context.toolRequired ? 'auto' : 'none';
-  }
-  const resp = await openai.chat.completions.create(aiPayload);
-  console.log('[Host] LLM response:', JSON.stringify(resp, null, 2));
+  // ** First pass **
+  const firstRes = await callOpenAI(payload);
 
-  const msg = resp.choices[0].message;
-  // 5. If LLM calls a function (old style) or a tool (new style), forward to MCP client
-  if (msg.function_call || (Array.isArray(msg.tool_calls) && msg.tool_calls.length > 0)) {
-    // Determine call info depending on spec
-    let name, rawArgs;
-    if (msg.function_call) {
-      ({ name, arguments: rawArgs } = msg.function_call);
-      console.log(`[Host] LLM requested function_call: ${name}(${rawArgs})`);
-    } else {
-      // new "tool_calls" format
-      const call = msg.tool_calls[0];
-      name = call.function.name;
-      rawArgs = call.function.arguments;
-      console.log(`[Host] LLM requested tool_call: ${name}(${rawArgs})`);
-    }
-    const args = rawArgs ? JSON.parse(rawArgs) : {};
-    // Record the tool call for UI
-    toolCalls.push({ name, args });
-    // Execute the tool on the MCP client
-    const result = await client.callTool({ name, arguments: args });
-    console.log(`[Host] Received result for ${name}:`, JSON.stringify(result, null, 2));
-    // Append the assistant's function_call/tool_calls message and its result
-    messages.push(msg);
-    // Extract function result content
-    let funcContent = '';
-    if (typeof result.result === 'string') {
-      funcContent = result.result;
-    } else if (typeof result.content === 'string') {
-      funcContent = result.content;
-    } else if (Array.isArray(result.content)) {
-      funcContent = result.content.map(item => typeof item === 'string' ? item : JSON.stringify(item)).join('\n');
-    } else if (result.content && typeof result.content === 'object' && 'text' in result.content) {
-      funcContent = result.content.text;
-    } else {
-      funcContent = JSON.stringify(result.content || result.result || result);
-    }
-    messages.push({ role: 'function', name, content: funcContent });
-    // Re-query LLM with function/tool output in context
-    const followUp = await openai.chat.completions.create({ model, messages });
-    console.log('[Host] LLM follow-up response:', JSON.stringify(followUp, null, 2));
-    return { reply: followUp.choices[0].message.content, toolCalls };
+  // If no function calls: pure‐text turn
+  if (!Array.isArray(firstRes.output) || firstRes.output.length === 0) {
+    const text = firstRes.output_text || '';
+    return { reply: text, toolCalls: [] };
   }
 
-  // No function call: return text content
-  return { reply: msg.content, toolCalls };
+  // ** Function‐call turn **
+  for (const call of firstRes.output) {
+    if (call.type !== 'function_call') continue;
+
+    const args = JSON.parse(call.arguments || '{}');
+    toolCalls.push({ name: call.name, args });
+
+    // Execute the function
+    const result = await client.callTool({ name: call.name, arguments: args });
+    const raw = result.result ?? result.content;
+    const resultStr = typeof raw === 'string' ? raw : JSON.stringify(raw);
+
+    // Append the function‐call message
+    input.push(
+      { type: 'function_call', name: call.name, arguments: call.arguments, call_id: call.call_id },
+      { type: 'function_call_output', call_id: call.call_id, output: resultStr }
+    );
+  }
+
+  // ** Second pass for final reply **
+  const finalRes = await callOpenAI({ model, input, tools });
+  const replyText = finalRes.output_text || '';
+  return { reply: replyText, toolCalls };
 }
 
 module.exports = {
   handleMessage,
-  resourceCache,
   invalidateResource,
-  invalidateTemplate
+  invalidateTemplate,
 };

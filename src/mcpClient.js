@@ -139,9 +139,33 @@ async function startMcpClient({ baseUrl, samplingModel, openai, broadcastUpdate 
   try {
     // Discover tools and initialize local cache
     const tl = await mcpClient.listTools();
-    const allTools = tl.tools || tl.result?.tools || [];
-    mcpInfo.servers[0].tools = allTools;
-    toolsCache = allTools.map(t => ({ name: t.name, description: t.description || '', enabled: true }));
+    const allTools = Array.isArray(tl.tools) ? tl.tools : tl.result?.tools || [];
+    
+    // Log the allTools object
+    console.log('[Host] allTools:', JSON.stringify(allTools, null, 2));
+    
+
+    mcpInfo.servers[0].tools = allTools.map(tool => ({
+      type: "function",
+      name: tool.name,
+      description: tool.description || '',
+      parameters: {
+        type: "object",
+        properties: tool.inputSchema?.properties || {},
+        required: tool.inputSchema?.required || [],
+        additionalProperties: false
+      },
+      strict: true
+    }));
+
+    // Keep the simple toolsCache for enabled/disabled state
+    toolsCache = allTools.map(t => ({ 
+      name: t.name, 
+      description: t.description || '', 
+      enabled: true 
+    }));
+    
+
     // Discover prompts, resources, and templates
     const pl = await mcpClient.listPrompts(); mcpInfo.servers[0].prompts = pl.prompts || pl.result?.prompts || [];
     const rl = await mcpClient.listResources(); mcpInfo.servers[0].resources = rl.resources || rl.result?.resources || [];
@@ -267,7 +291,9 @@ async function startMcpClient({ baseUrl, samplingModel, openai, broadcastUpdate 
 
 function getMcpClient() { return mcpClient; }
 function getSupportsResourceSubscribe() { return supportsResourceSubscribe; }
-function getMcpInfo() { return mcpInfo; }
+function getMcpInfo() {
+  return mcpInfo;
+}
 /**
  * Add a root to the client store
  * @param {string} name
@@ -306,6 +332,14 @@ function setToolEnabled(name, enabled) {
   tool.enabled = !!enabled;
   return tool;
 }
+/**
+ * Get the list of enabled tools formatted for OpenAI function calling
+ * @returns {Array<{type:string,name:string,description:string,parameters:object}>}
+ */
+function getEnabledTools() {
+  return mcpInfo.servers[0].tools
+    .filter(t => toolsCache.find(ct => ct.name === t.name && ct.enabled));
+}
 module.exports = {
   startMcpClient,
   getMcpClient,
@@ -315,5 +349,6 @@ module.exports = {
   setToolEnabled,
   addRoot,
   removeRoot,
-  getRoots
+  getRoots,
+  getEnabledTools
 };
