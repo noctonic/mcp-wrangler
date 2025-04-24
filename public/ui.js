@@ -144,6 +144,8 @@ document.addEventListener('DOMContentLoaded', () => {
   }
   // Track URIs that have been fetched and cached by the host
   const cachedUris = new Set();
+  // Track URIs that the user has actively selected (survives list re-renders)
+  const activeUris = new Set();
   const templateCache = {};
   // Render the list of resources in the table
   function renderResourceList() {
@@ -160,10 +162,13 @@ document.addEventListener('DOMContentLoaded', () => {
       cb.type = 'checkbox'; 
       cb.id = `res_${idx}`; 
       cb.dataset.uri = uri;
-      // If this URI was previously cached, check the active checkbox by default
-      if (cachedUris.has(uri)) {
-        cb.checked = true;
-      }
+      // Active column: check based on user selection (activeUris)
+      cb.checked = activeUris.has(uri);
+      // Keep activeUris in sync when user toggles
+      cb.addEventListener('change', () => {
+        if (cb.checked) activeUris.add(uri);
+        else activeUris.delete(uri);
+      });
       tdActive.appendChild(cb);
       tr.appendChild(tdActive);
       // Cache column

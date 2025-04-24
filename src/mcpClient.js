@@ -8,347 +8,246 @@ const {
   PromptListChangedNotificationSchema,
   ToolListChangedNotificationSchema,
   CreateMessageRequestSchema,
-  CreateMessageResultSchema
+  ListRootsRequestSchema
 } = require('@modelcontextprotocol/sdk/types.js');
 const { resourceCache, invalidateResource } = require('./chatRouter.js');
 
 let mcpClient = null;
 let supportsResourceSubscribe = false;
-// In-memory roots store
 let rootsStore = [];
-// Local cache of tools with enabled/disabled state
 let toolsCache = [];
-const mcpInfo = {
-  servers: [
-    {
-      url: null,
-      capabilities: {},
-      tools: [],
-      prompts: [],
-      resources: [],
-      templates: []
-    }
-  ]
+const mcpInfo = { servers: [{ url: null, capabilities: {}, tools: [], prompts: [], resources: [], templates: [] }] };
+
+// Configuration
+const RETRY_INTERVAL_MS = 1000;
+const MAX_RETRIES = 5;
+
+// Simple logger utility
+const logger = {
+  log: (msg, data) => console.log(`[MCP] ${msg}`, data || ''),
+  warn: (msg, data) => console.warn(`[MCP] WARN: ${msg}`, data || ''),
+  error: (msg, data) => console.error(`[MCP] ERROR: ${msg}`, data || '')
 };
 
-/**
- * Initialize and connect the MCP client.
- * @param {object} options
- * @param {URL} options.baseUrl - MCP server URL
- * @param {string} options.samplingModel - model name for sampling
- * @param {object} options.openai - OpenAI client instance
- * @param {function} options.broadcastUpdate - SSE broadcast function
- */
-async function startMcpClient({ baseUrl, samplingModel, openai, broadcastUpdate }) {
-  mcpClient = new Client(
-    { name: 'demo-mcp-host', version: '0.1.0' },
-    { capabilities: { roots: { listChanged: true }, sampling: {}, experimental: { ping: {} } } }
-  );
-  // Logging handlers
-  mcpClient.fallbackNotificationHandler = (notification) => {
-    console.log('[Host] Raw MCP notification:', notification.method, notification.params);
+// Retry helper
+async function retryWithDelay(fn, delay = RETRY_INTERVAL_MS, retries = MAX_RETRIES) {
+  for (let i = 0; i < retries; i++) {
+    try {
+      return await fn();
+    } catch (err) {
+      if (i === retries - 1) throw err;
+      logger.warn(`Attempt ${i + 1} failed, retrying in ${delay}ms...`, err.message);
+      await new Promise(res => setTimeout(res, delay));
+    }
+  }
+}
+
+// Transport setup (HTTP -> SSE fallback)
+async function setupTransport(baseUrl, client) {
+  try {
+    await retryWithDelay(() => client.connect(new StreamableHTTPClientTransport(baseUrl)));
+    logger.log('Connected using Streamable HTTP transport');
+  } catch (err) {
+    const status = err.status || err.code || err.response?.status;
+    if (String(err).includes('(HTTP 4') || (typeof status === 'number' && status >= 400 && status < 500)) {
+      logger.warn('Streamable HTTP 4xx, falling back to SSE', err.message);
+      await retryWithDelay(() => client.connect(new SSEClientTransport(baseUrl)));
+      logger.log('Connected using SSE transport');
+    } else {
+      throw err;
+    }
+  }
+}
+
+// Patch progress events into callTool/readResource
+function patchProgress(client, broadcastUpdate) {
+  const origCallTool = client.callTool.bind(client);
+  client.callTool = (params, schema, options = {}) => {
+    const controller = new AbortController();
+    const onprogress = p => broadcastUpdate('progress', p);
+    return origCallTool(params, schema, { ...options, signal: controller.signal, onprogress });
   };
-  mcpClient.onerror = (error) => {
-    console.error('[Host] MCP transport error:', error);
+
+  const origReadResource = client.readResource.bind(client);
+  client.readResource = (params, options = {}) => {
+    const controller = new AbortController();
+    const onprogress = p => broadcastUpdate('progress', p);
+    return origReadResource(params, { ...options, signal: controller.signal, onprogress });
   };
-  mcpClient.onclose = () => {
-    console.warn('[Host] MCP transport closed');
-  };
-  // Handle server request for roots list
-  const { ListRootsRequestSchema } = require('@modelcontextprotocol/sdk/types.js');
-  mcpClient.setRequestHandler(ListRootsRequestSchema, async () => ({ roots: rootsStore }));
-  // Handle server-initiated sampling requests
-  mcpClient.setRequestHandler(CreateMessageRequestSchema, async (request) => {
-    const params = request.params;
+}
+
+// Register request handlers
+function registerRequestHandlers(client, samplingModel, openai, broadcastUpdate) {
+  client.setRequestHandler(ListRootsRequestSchema, async () => ({ roots: rootsStore }));
+
+  client.setRequestHandler(CreateMessageRequestSchema, async request => {
+    const { params } = request;
     const reqId = String(request.id);
-    console.log('[Host] Sampling requested by server:', reqId, params);
+    logger.log('Sampling requested:', { reqId, params });
     broadcastUpdate('sampling/request', { id: reqId, ...params });
-    // Wait for decision via /sampling/decision endpoint
+
     const decision = await new Promise((resolve, reject) => {
-      const key = reqId;
-      const handlers = require('./samplingDecision');
-      handlers.once(key, resolve, reject);
+      require('./samplingDecision').once(reqId, resolve, reject);
     });
     if (!decision) {
       const err = new Error('User rejected sampling request'); err.code = -1;
       throw err;
     }
-    // Build messages and call OpenAI
-    const msgs = [];
-    if (params.systemPrompt) msgs.push({ role: 'system', content: params.systemPrompt });
+
+    const messages = [];
+    if (params.systemPrompt) messages.push({ role: 'system', content: params.systemPrompt });
     for (const m of params.messages || []) {
-      if (m.content?.type === 'text') msgs.push({ role: m.role, content: m.content.text });
+      if (m.content?.type === 'text') messages.push({ role: m.role, content: m.content.text });
     }
-    const resp = await openai.chat.completions.create({ model: samplingModel, messages: msgs, temperature: params.temperature, max_tokens: params.maxTokens, stop: params.stopSequences });
-    const choice = resp.choices?.[0];
-    const text = choice?.message?.content || '';
-    const stopReason = choice?.finish_reason === 'stop' ? 'stopSequence' : choice?.finish_reason === 'length' ? 'maxTokens' : 'endTurn';
-    const result = { role: 'assistant', content: { type: 'text', text }, model: choice?.model || samplingModel, stopReason };
+
+    const resp = await openai.chat.completions.create({
+      model: samplingModel,
+      messages,
+      temperature: params.temperature,
+      max_tokens: params.maxTokens,
+      stop: params.stopSequences
+    });
+
+    const choice = resp.choices?.[0] || {};
+    const text = choice.message?.content || '';
+    const finish = choice.finish_reason;
+    const stopReason = finish === 'stop' ? 'stopSequence' : finish === 'length' ? 'maxTokens' : 'endTurn';
+
+    const result = { role: 'assistant', content: { type: 'text', text }, model: choice.model || samplingModel, stopReason };
     broadcastUpdate('sampling/response', result);
     return result;
   });
-  // Attempt Streamable HTTP transport, fallback to SSE on HTTP 4xx with retries
-  let usingSse = false;
-  while (true) {
+}
+
+// Register notification handlers
+async function registerNotificationHandlers(client, broadcastUpdate) {
+  const caps = client.getServerCapabilities() || {};
+  supportsResourceSubscribe = Boolean(caps.resources?.subscribe);
+
+  client.setNotificationHandler(ProgressNotificationSchema, notif => {
+    broadcastUpdate('progress', notif.params || {});
+  });
+
+  client.setNotificationHandler(ResourceUpdatedNotificationSchema, notif => {
+    const { uri } = notif.params || {};
+    if (uri) {
+      logger.log('Invalidating cache for', uri);
+      invalidateResource(uri);
+    }
+    broadcastUpdate('resources/change', notif.params || {});
+  });
+
+  client.setNotificationHandler(ResourceListChangedNotificationSchema, async notif => {
+    logger.log('Resource list changed, updating cache');
     try {
-      const httpTransport = new StreamableHTTPClientTransport(baseUrl);
-      await mcpClient.connect(httpTransport);
-      console.log('Connected using Streamable HTTP transport');
-      break;
+      const rl = await client.listResources();
+      const newEntries = rl.resources || rl.result?.resources || [];
+      const oldUris = (mcpInfo.servers[0].resources || []).map(r => typeof r === 'string' ? r : r.uri);
+      const newUris = newEntries.map(r => typeof r === 'string' ? r : r.uri);
+      const added = newUris.filter(u => !oldUris.includes(u));
+      const removed = oldUris.filter(u => !newUris.includes(u));
+      if (supportsResourceSubscribe) {
+        for (const uri of removed) {
+          try { await client.unsubscribeResource({ uri }); } catch {}
+        }
+      }
+      mcpInfo.servers[0].resources = newEntries;
+      broadcastUpdate('resources/list_changed', { resources: newUris, added, removed });
     } catch (err) {
-      const msg = err.message || err;
-      const status = err.status || err.code || err.response?.status;
-      if (msg.includes('(HTTP 4') || (typeof status === 'number' && status >= 400 && status < 500)) {
-        console.warn('Streamable HTTP returned 4xx, falling back to SSE transport');
-        usingSse = true;
-        break;
-      }
-      console.error('Streamable HTTP transport error, retrying in 1s:', msg);
-      await new Promise(r => setTimeout(r, 1000));
+      logger.error('Error handling resource list change', err);
     }
-  }
-  // If HTTP failed with 4xx, connect via SSE with retry loop
-  if (usingSse) {
-    const retryIntervalMs = 1000;
-    while (true) {
-      try {
-        const sseTransport = new SSEClientTransport(baseUrl);
-        await mcpClient.connect(sseTransport);
-        console.log('Connected using SSE transport');
-        break;
-      } catch (err2) {
-        console.error('SSE transport connect error, retrying in 1s:', err2.message || err2);
-        await new Promise(r => setTimeout(r, retryIntervalMs));
-      }
-    }
-  }
+  });
+
+  client.setNotificationHandler(PromptListChangedNotificationSchema, notif => {
+    broadcastUpdate('prompts/list_changed', notif.params || {});
+  });
+
+  client.setNotificationHandler(ToolListChangedNotificationSchema, notif => {
+    broadcastUpdate('tools/list_changed', notif.params || {});
+  });
+}
+
+// Main initializer
+async function startMcpClient({ baseUrl, samplingModel, openai, broadcastUpdate }) {
+  mcpClient = new Client(
+    { name: 'demo-mcp-host', version: '0.1.0' },
+    { capabilities: { roots: { listChanged: true }, sampling: {}, experimental: { ping: {} } } }
+  );
+
+  // Basic handlers
+  mcpClient.fallbackNotificationHandler = notification => logger.log('Raw MCP notification', notification);
+  mcpClient.onerror = err => logger.error('Transport error', err);
+  mcpClient.onclose = () => logger.warn('Transport closed');
+
+  registerRequestHandlers(mcpClient, samplingModel, openai, broadcastUpdate);
+  await setupTransport(baseUrl, mcpClient);
+
   // Instrument incoming messages
   if (mcpClient.transport) {
-    const transport = mcpClient.transport;
-    const orig = transport.onmessage;
-    transport.onmessage = (msg, extra) => {
-      try {
-        console.log('[Host] MCP message received:', JSON.stringify(msg, null, 2));
-      } catch {
-        console.log('[Host] MCP message received:', msg);
-      }
-      if (orig) orig.call(transport, msg, extra);
+    const orig = mcpClient.transport.onmessage;
+    mcpClient.transport.onmessage = (msg, extra) => {
+      logger.log('MCP message received', msg);
+      if (orig) orig.call(mcpClient.transport, msg, extra);
     };
   }
+
   // Initial discovery
   try {
-    // Discover tools and initialize local cache
     const tl = await mcpClient.listTools();
     const allTools = Array.isArray(tl.tools) ? tl.tools : tl.result?.tools || [];
-    
-    // Log the allTools object
-    console.log('[Host] allTools:', JSON.stringify(allTools, null, 2));
-    
-
-    mcpInfo.servers[0].tools = allTools.map(tool => ({
-      type: "function",
-      name: tool.name,
-      description: tool.description || '',
-      parameters: {
-        type: "object",
-        properties: tool.inputSchema?.properties || {},
-        required: tool.inputSchema?.required || [],
-        additionalProperties: false
-      },
-      strict: true
+    mcpInfo.servers[0].tools = allTools.map(t => ({
+      type: 'function', name: t.name, description: t.description || '',
+      parameters: { type: 'object', properties: t.inputSchema?.properties || {}, required: t.inputSchema?.required || [], additionalProperties: false }, strict: true
     }));
+    toolsCache = allTools.map(t => ({ name: t.name, description: t.description || '', enabled: true }));
 
-    // Keep the simple toolsCache for enabled/disabled state
-    toolsCache = allTools.map(t => ({ 
-      name: t.name, 
-      description: t.description || '', 
-      enabled: true 
-    }));
-    
+    const pl = await mcpClient.listPrompts();
+    mcpInfo.servers[0].prompts = pl.prompts || pl.result?.prompts || [];
+    const rl = await mcpClient.listResources();
+    mcpInfo.servers[0].resources = rl.resources || rl.result?.resources || [];
+    const tpl = await mcpClient.listResourceTemplates();
+    mcpInfo.servers[0].templates = tpl.resourceTemplates || tpl.result?.resourceTemplates || [];
 
-    // Discover prompts, resources, and templates
-    const pl = await mcpClient.listPrompts(); mcpInfo.servers[0].prompts = pl.prompts || pl.result?.prompts || [];
-    const rl = await mcpClient.listResources(); mcpInfo.servers[0].resources = rl.resources || rl.result?.resources || [];
-    const tpl = await mcpClient.listResourceTemplates(); mcpInfo.servers[0].templates = tpl.resourceTemplates || tpl.result?.resourceTemplates || [];
-  } catch (e) {
-    console.error('[Host] Initial discovery error:', e);
+  } catch (err) {
+    logger.error('Initial discovery error', err);
   }
-  // Monkey-patch callTool and readResource to emit progress events during streaming
-  try {
-    // Patch callTool for progress
-    const origCallTool = mcpClient.callTool.bind(mcpClient);
-    mcpClient.callTool = (params, resultSchema, options = {}) => {
-      const controller = new AbortController();
-      const onprogress = (progressParams) => {
-        broadcastUpdate('progress', progressParams);
-      };
-      return origCallTool(params, resultSchema, { ...options, signal: controller.signal, onprogress });
-    };
-    // Patch readResource for progress
-    const origReadResource = mcpClient.readResource.bind(mcpClient);
-    mcpClient.readResource = (params, options = {}) => {
-      const controller = new AbortController();
-      const onprogress = (progressParams) => {
-        broadcastUpdate('progress', progressParams);
-      };
-      return origReadResource(params, { ...options, signal: controller.signal, onprogress });
-    };
-  } catch (e) {
-    console.warn('[Host] Progress patching skipped:', e);
-  }
-  // Listen for change notifications
-  if (mcpClient.addEventListener) {
-    mcpClient.addEventListener('resources/change', p => broadcastUpdate('resources/change', p));
-    mcpClient.addEventListener('resourceTemplates/change', p => broadcastUpdate('templates/change', p));
-  }
-  // Capability negotiation, progress notifications, and ping
-  try {
-    const caps = mcpClient.getServerCapabilities() || {};
-    mcpInfo.servers[0].capabilities = caps;
-    supportsResourceSubscribe = Boolean(caps.resources?.subscribe);
-    // Register handler for progress notifications
-    if (mcpClient.setNotificationHandler) {
-      mcpClient.setNotificationHandler(ProgressNotificationSchema, (notification) => {
-        const params = notification.params || {};
-        broadcastUpdate('progress', params);
-      });
-    }
-    // Periodic ping to keep connection alive
-    setInterval(async () => {
-      try {
-        await mcpClient.ping();
-        console.log('[Host] Ping successful');
-      } catch (err) {
-        console.error('[Host] Ping error:', err);
-      }
-    }, 30000);
-    console.log('[Host] Scheduled ping every 30s');
-    // Handle resource update notifications (per-resource)
-    if (mcpClient.setNotificationHandler) {
-      mcpClient.setNotificationHandler(
-        ResourceUpdatedNotificationSchema,
-        (notification) => {
-          const params = notification.params || {};
-          console.log('[Host] Resource updated notification:', params);
-          // Invalidate the resource cache
-          if (params.uri) {
-            console.log('[Host] Invalidating cache for resource:', params.uri);
-            invalidateResource(params.uri);
-          }
-          broadcastUpdate('resources/change', params);
-        }
-      );
-      // Handle resource list change notifications
-      mcpClient.setNotificationHandler(
-        ResourceListChangedNotificationSchema,
-        async (notification) => {
-          console.log('[Host] Resource list changed notification received');
-          try {
-            const rl = await mcpClient.listResources();
-            const newEntries = rl.resources || rl.result?.resources || [];
-            console.log('[Host] Updated resources list:', newEntries);
-            const oldEntries = mcpInfo.servers[0].resources || [];
-            const oldUris = oldEntries.map(r => typeof r === 'string' ? r : r.uri);
-            const newUris = newEntries.map(r => typeof r === 'string' ? r : r.uri);
-            const added = newUris.filter(u => !oldUris.includes(u));
-            const removed = oldUris.filter(u => !newUris.includes(u));
-            // Optionally unsubscribe removed resources
-            if (caps.resources?.subscribe) {
-              for (const uri of removed) {
-                try { await mcpClient.unsubscribeResource({ uri }); } catch {}
-              }
-            }
-            mcpInfo.servers[0].resources = newEntries;
-            broadcastUpdate('resources/list_changed', { resources: newUris, added, removed });
-          } catch (err) {
-            console.error('[Host] Error handling resource list change:', err);
-          }
-        }
-      );
-      // Handle prompt list change notifications
-      mcpClient.setNotificationHandler(
-        PromptListChangedNotificationSchema,
-        (notification) => {
-          const params = notification.params || {};
-          console.log('[Host] Prompts list changed:', params);
-          broadcastUpdate('prompts/list_changed', params);
-        }
-      );
-      // Handle tool list change notifications
-      mcpClient.setNotificationHandler(
-        ToolListChangedNotificationSchema,
-        (notification) => {
-          const params = notification.params || {};
-          console.log('[Host] Tools list changed:', params);
-          broadcastUpdate('tools/list_changed', params);
-        }
-      );
-    }
-  } catch (e) {
-    console.error('[Host] Capabilities negotiation error:', e);
-  }
+
+  patchProgress(mcpClient, broadcastUpdate);
+  await registerNotificationHandlers(mcpClient, broadcastUpdate);
+
+  // Periodic ping
+  setInterval(async () => {
+    try { await mcpClient.ping(); logger.log('Ping successful'); }
+    catch (err) { logger.error('Ping error', err); }
+  }, 30000);
 }
 
 function getMcpClient() { return mcpClient; }
 function getSupportsResourceSubscribe() { return supportsResourceSubscribe; }
-function getMcpInfo() {
-  return mcpInfo;
-}
-/**
- * Add a root to the client store
- * @param {string} name
- * @param {string} uri
- */
-function addRoot(name, uri) {
-  rootsStore.push({ name, uri });
-}
-/**
- * Remove a root by name
- * @param {string} name
- */
-function removeRoot(name) {
-  const idx = rootsStore.findIndex(r => r.name === name);
-  if (idx !== -1) rootsStore.splice(idx, 1);
-}
-/**
- * Get a copy of the roots list
- * @returns {Array<{name:string,uri:string}>}
- */
+function getMcpInfo() { return mcpInfo; }
+function addRoot(name, uri) { rootsStore.push({ name, uri }); }
+function removeRoot(name) { rootsStore = rootsStore.filter(r => r.name !== name); }
 function getRoots() { return rootsStore.slice(); }
-/**
- * Get the list of tools with enabled state
- * @returns {Array<{name:string,description:string,enabled:boolean}>}
- */
 function getTools() { return toolsCache; }
-/**
- * Enable or disable a tool by name
- * @param {string} name
- * @param {boolean} enabled
- * @returns {{name:string,description:string,enabled:boolean}|null}
- */
 function setToolEnabled(name, enabled) {
   const tool = toolsCache.find(t => t.name === name);
   if (!tool) return null;
   tool.enabled = !!enabled;
   return tool;
 }
-/**
- * Get the list of enabled tools formatted for OpenAI function calling
- * @returns {Array<{type:string,name:string,description:string,parameters:object}>}
- */
 function getEnabledTools() {
-  return mcpInfo.servers[0].tools
-    .filter(t => toolsCache.find(ct => ct.name === t.name && ct.enabled));
+  return mcpInfo.servers[0].tools.filter(t => toolsCache.find(ct => ct.name === t.name && ct.enabled));
 }
+
 module.exports = {
   startMcpClient,
   getMcpClient,
   getSupportsResourceSubscribe,
   getMcpInfo,
-  getTools,
-  setToolEnabled,
   addRoot,
   removeRoot,
   getRoots,
+  getTools,
+  setToolEnabled,
   getEnabledTools
 };
