@@ -157,14 +157,30 @@ document.addEventListener('DOMContentLoaded', () => {
       const tdActive = document.createElement('td');
       tdActive.className = 'col-active';
       const cb = document.createElement('input');
-      cb.type = 'checkbox'; cb.id = `res_${idx}`; cb.dataset.uri = uri;
+      cb.type = 'checkbox'; 
+      cb.id = `res_${idx}`; 
+      cb.dataset.uri = uri;
+      // If this URI was previously cached, check the active checkbox by default
+      if (cachedUris.has(uri)) {
+        cb.checked = true;
+      }
       tdActive.appendChild(cb);
       tr.appendChild(tdActive);
       // Cache column
       const tdCache = document.createElement('td');
       tdCache.className = 'col-cache';
       const useCb = document.createElement('input');
-      useCb.type = 'checkbox'; useCb.id = `useCached_${idx}`; useCb.className = 'use-cached'; useCb.disabled = true;
+      useCb.type = 'checkbox'; 
+      useCb.id = `useCached_${idx}`; 
+      useCb.className = 'use-cached';
+      // Enable and check the cache checkbox if this URI was previously cached
+      if (cachedUris.has(uri)) {
+        useCb.disabled = false;
+        useCb.checked = true;
+      } else {
+        useCb.disabled = true;
+        useCb.checked = false;
+      }
       tdCache.appendChild(useCb);
       tr.appendChild(tdCache);
       // Name column
@@ -173,11 +189,6 @@ document.addEventListener('DOMContentLoaded', () => {
       tdName.title = uri;
       tdName.innerText = uri;
       tr.appendChild(tdName);
-      // If this URI was previously fetched, enable and check Use Cached
-      if (cachedUris.has(uri)) {
-        useCb.disabled = false;
-        useCb.checked = true;
-      }
       tbody.appendChild(tr);
     });
   }
@@ -254,10 +265,10 @@ document.addEventListener('DOMContentLoaded', () => {
       // Display assistant reply
       appendMessage('assistant', data.reply || '[No reply]');
       // Enable "Use cached" toggles now that resources have been fetched
-      document.querySelectorAll('#resources input.use-cached').forEach(useCb => {
-        const item = useCb.parentNode;
-        const mainCb = item.querySelector('input[type=checkbox]');
-        if (mainCb && mainCb.checked) {
+      document.querySelectorAll('#resourcesTable tr').forEach(tr => {
+        const mainCb = tr.querySelector('input[type=checkbox]:not(.use-cached)');
+        const useCb = tr.querySelector('input.use-cached');
+        if (mainCb && mainCb.checked && useCb) {
           useCb.disabled = false;
           useCb.checked = true;
           // Mark this URI as cached for future list renders
@@ -608,6 +619,13 @@ document.addEventListener('DOMContentLoaded', () => {
     }
     console.log('[UI] parsed resources/change data:', data);
     const { uri } = data;
+    
+    // Remove the URI from the cachedUris set to indicate it's no longer cached
+    if (uri && cachedUris.has(uri)) {
+      console.log('[UI] Removing URI from cached set:', uri);
+      cachedUris.delete(uri);
+    }
+    
     const idx = window.mcpResources.findIndex(r => (typeof r === 'string' ? r : r.uri) === uri);
     console.log('[UI] resource index matched:', idx);
     const useCb = document.getElementById(`useCached_${idx}`);
@@ -629,6 +647,6 @@ document.addEventListener('DOMContentLoaded', () => {
       return;
     }
     console.log('[UI] parsed templates/change data:', data);
-    // Templates aren’t cached in UI, so no UI update needed.
+    // Templates aren't cached in UI, so no UI update needed.
   });
 });

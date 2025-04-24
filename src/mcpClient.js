@@ -10,6 +10,7 @@ const {
   CreateMessageRequestSchema,
   CreateMessageResultSchema
 } = require('@modelcontextprotocol/sdk/types.js');
+const { resourceCache, invalidateResource } = require('./chatRouter.js');
 
 let mcpClient = null;
 let supportsResourceSubscribe = false;
@@ -205,6 +206,11 @@ async function startMcpClient({ baseUrl, samplingModel, openai, broadcastUpdate 
         (notification) => {
           const params = notification.params || {};
           console.log('[Host] Resource updated notification:', params);
+          // Invalidate the resource cache
+          if (params.uri) {
+            console.log('[Host] Invalidating cache for resource:', params.uri);
+            invalidateResource(params.uri);
+          }
           broadcastUpdate('resources/change', params);
         }
       );

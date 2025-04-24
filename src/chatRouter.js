@@ -219,4 +219,9 @@ async function handleMessage(message, context) {
   return { reply: msg.content, toolCalls };
 }
 
-module.exports = { handleMessage, invalidateResource, invalidateTemplate };
+module.exports = {
+  handleMessage,
+  resourceCache,
+  invalidateResource,
+  invalidateTemplate
+};
