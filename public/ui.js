@@ -1,4 +1,18 @@
 document.addEventListener('DOMContentLoaded', () => {
+  let conversationEnabled = false;
+  let previousResponseId = null;
+
+  const convoToggle = document.getElementById('conversationToggle');
+  convoToggle.addEventListener('change', () => {
+    conversationEnabled = convoToggle.checked;
+  });
+
+  const resetBtn = document.getElementById('resetConversation');
+  resetBtn.addEventListener('click', () => {
+    previousResponseId = null;
+    appendMessage('info', 'Conversation has been reset.');
+  });
+
   const messagesDiv = document.getElementById('messages');
   const input = document.getElementById('messageInput');
   const btn = document.getElementById('sendBtn');
@@ -252,10 +266,15 @@ document.addEventListener('DOMContentLoaded', () => {
           selectedTemplates,
           model: currentModel,
           // Include tool_required flag for whether functions are allowed
-          tool_required: document.getElementById('requiredToolsToggle')?.checked === true
+          tool_required: document.getElementById('requiredToolsToggle')?.checked === true,
+          conversation: conversationEnabled,
+          previous_response_id: previousResponseId
         })
       });
       const data = await resp.json();
+      if (data.response_id) {
+        previousResponseId = data.response_id;
+      }
       // Handle cancellation
       if (data.cancelled) {
         appendMessage('info', 'Operation cancelled by user');

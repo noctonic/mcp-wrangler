@@ -3,16 +3,25 @@ const path = require('path');
 const cors = require('cors');
 const OpenAI = require('openai');
 
-const { startMcpClient, getMcpClient, getSupportsResourceSubscribe, getTools, setToolEnabled, addRoot, removeRoot, getRoots } = require('./mcpClient');
+const {
+  startMcpClient,
+  getMcpClient,
+  getSupportsResourceSubscribe,
+  getTools,
+  setToolEnabled,
+  addRoot,
+  removeRoot,
+  getRoots
+} = require('./mcpClient');
 const { initSSE, broadcastUpdate } = require('./sse');
 const openaiRoutes = require('./routes/openaiRoutes');
 const resourceRoutes = require('./routes/resourceRoutes');
 const tasks = require('./tasks');
 const chatRouter = require('./chatRouter');
-// Load environment variables from .env if present
 require('dotenv').config();
 const fs = require('fs');
 const yaml = require('js-yaml');
+
 // Load config.yaml
 let config = {};
 try {
@@ -28,24 +37,20 @@ const port = process.env.PORT || 8000;
 // Middleware
 app.use(cors());
 app.use(express.json());
-// Serve static assets from the public folder one level up
 app.use(express.static(path.join(__dirname, '../public')));
 
 // Initialize SSE endpoints
 initSSE(app);
 
-// Resolve configuration: override via environment, then config.yaml, then defaults
+// Resolve configuration
 const mcpServerUrl = process.env.MCP_SERVER_URL || config.MCP_SERVER_URL || 'http://localhost:8080';
-// OPENAI_API_KEY can come from environment or config.yaml
 const apiKey = process.env.OPENAI_API_KEY || config.OPENAI_API_KEY;
 if (!apiKey) {
   console.error('Missing OPENAI_API_KEY: please set via environment variable or config.yaml');
   process.exit(1);
 }
-// Optional OpenAI base URL
 const baseURL = process.env.OPENAI_BASE_URL || config.OPENAI_BASE_URL;
 const openai = new OpenAI({ apiKey, baseURL });
-// Default model and samplingModel
 const model = process.env.MODEL || config.MODEL || 'gpt-4.1-nano';
 const samplingModel = process.env.SAMPLING_MODEL || config.SAMPLING_MODEL || model;
 
@@ -68,12 +73,16 @@ const samplingModel = process.env.SAMPLING_MODEL || config.SAMPLING_MODEL || mod
 app.use(openaiRoutes({ openai, model }));
 app.use(resourceRoutes);
 
-// Configuration endpoint for UI
+// Configuration endpoint
 app.get('/config', (req, res) => {
-  res.json({ MCP_SERVER_URL: mcpServerUrl, MODEL: model, SAMPLING_MODEL: samplingModel });
+  res.json({
+    MCP_SERVER_URL: mcpServerUrl,
+    MODEL: model,
+    SAMPLING_MODEL: samplingModel
+  });
 });
 
-// Tools listing and configuration endpoints
+// Tools endpoints
 app.get('/tools', (req, res) => {
   res.json({ tools: getTools() });
 });
@@ -83,12 +92,11 @@ app.post('/tools/config', (req, res) => {
   if (!tool) return res.status(404).json({ error: 'Tool not found' });
   res.json({ tool });
 });
-// Roots endpoints (delegated to mcpClient)
-/** GET /roots - list all roots */
+
+// Roots endpoints
 app.get('/roots', (req, res) => {
   res.json({ roots: getRoots() });
 });
-/** POST /roots - add a new root */
 app.post('/roots', async (req, res) => {
   const { name, uri } = req.body;
   if (!name || !uri) return res.status(400).json({ error: 'Name and URI required' });
@@ -97,13 +105,10 @@ app.post('/roots', async (req, res) => {
   const newRoot = { name, uri };
   addRoot(name, uri);
   const roots = getRoots();
-  // Notify UI
   broadcastUpdate('roots/list_changed', { roots, added: [newRoot], removed: [] });
-  // Notify MCP server
   try { await getMcpClient().sendRootsListChanged(); } catch (err) { console.error('[Host] roots list_changed to server failed:', err); }
   res.json({ roots });
 });
-/** DELETE /roots - remove a root by name */
 app.delete('/roots', async (req, res) => {
   const { name } = req.body;
   const exists = getRoots().find(r => r.name === name);
@@ -118,7 +123,19 @@ app.delete('/roots', async (req, res) => {
 // Chat endpoint
 app.post('/chat/openai', async (req, res) => {
   try {
-    const { message, promptName, promptArgs, selectedResources, selectedTemplates, model: requested, tools: requestedTools, tool_required } = req.body;
+    const {
+      message,
+      promptName,
+      promptArgs,
+      selectedResources,
+      selectedTemplates,
+      model: requested,
+      tools: requestedTools,
+      tool_required,
+      conversation = false,
+      previous_response_id = null
+    } = req.body;
+
     const usedModel = requested || model;
     const context = {
       mcpClient: getMcpClient(),
@@ -129,15 +146,21 @@ app.post('/chat/openai', async (req, res) => {
       promptArgs,
       selectedResources,
       selectedTemplates,
-      // override functions via requestedTools array
       requestedTools: Array.isArray(requestedTools) ? requestedTools : null,
-      // tool_required toggles function_call: 'auto' or 'none'
-      toolRequired: tool_required === true
+      toolRequired: tool_required === true,
+      conversationEnabled: Boolean(conversation),
+      previousResponseId: previous_response_id
     };
-    const result = await chatRouter.handleMessage(message, context);
-    // Log the full chat response to the UI
-    // console.log('[mcp-wrangler] Chat response:', JSON.stringify(result, null, 2));
-    res.json(result);
+
+    // Invoke chat logic
+    const { reply, toolCalls, responseId } = await chatRouter.handleMessage(message, context);
+
+    // Return snake_case previous_response_id
+    res.json({
+      reply,
+      toolCalls,
+      response_id: responseId
+    });
   } catch (err) {
     console.error('[Host] /chat/openai error:', err);
     res.status(500).json({ error: err.message });
@@ -161,7 +184,6 @@ app.post('/sampling/decision', (req, res) => {
   }
   res.json({ success: true });
 });
-
 
 // Start the server
 app.listen(port, () => {

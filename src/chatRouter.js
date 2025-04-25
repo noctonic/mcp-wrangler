@@ -21,7 +21,14 @@ function invalidateTemplate(uri) {
  * @returns {Promise<{reply: string, toolCalls: Array}>}
  */
 async function handleMessage(message, context) {
-  const { mcpClient, openai, model, promptName, promptArgs, selectedResources, selectedTemplates, toolRequired } = context;
+  const {
+    mcpClient, openai, model,
+    promptName, promptArgs,
+    selectedResources, selectedTemplates,
+    toolRequired,
+    conversationEnabled,
+    previousResponseId
+  } = context;
   const client = mcpClient;
   const toolCalls = [];
   const input = [];
@@ -101,8 +108,15 @@ async function handleMessage(message, context) {
   const tools = getEnabledTools();
   console.log('Enabled tools:', tools.map(t => t.name));
 
-  // 6. Build payload
-  const payload = { model, input };
+  // 6. Build payload (conversation chaining + auto-truncation)
+  const payload = {
+    model,
+    input,
+    truncation: 'auto'
+  };
+  if (conversationEnabled && previousResponseId) {
+    payload.previous_response_id = previousResponseId;
+  }
   if (tools.length) {
     payload.tools = tools;
     if (toolRequired) payload.tool_choice = 'required';
@@ -135,15 +149,16 @@ async function handleMessage(message, context) {
   // ** First pass **
   const firstRes = await callOpenAI(payload);
 
-  // If no function calls: pure‐text turn
-  if (!Array.isArray(firstRes.output) || firstRes.output.length === 0) {
-    const text = firstRes.output_text || '';
-    return { reply: text, toolCalls: [] };
-  }
+  // Gather any function_call events
+  const functionCalls = Array.isArray(firstRes.output)
+    ? firstRes.output.filter(c => c.type === 'function_call')
+    : [];
 
-  // ** Function-call turn (parallel) **
-  // 1. Gather all function_call events
-  const functionCalls = firstRes.output.filter(c => c.type === 'function_call');
+  // If no function calls: pure-text turn (skip second pass)
+  if (functionCalls.length === 0) {
+    const text = firstRes.output_text || '';
+    return { reply: text, toolCalls: [], responseId: firstRes.id };
+  }
 
   // 2. Execute them in parallel
   const callResults = await Promise.all(functionCalls.map(async call => {
@@ -170,10 +185,15 @@ async function handleMessage(message, context) {
   }
 
   // ** Second pass for final reply **
-  console.log("[Tool Results]",JSON.stringify(input) )
-  const finalRes = await callOpenAI({ model, input, tools });
+  console.log("[Tool Results]", JSON.stringify(input));
+  // For chaining: use firstRes.id as previous_response_id if conversation is enabled
+  // if (conversationEnabled) {
+  //   payload.previous_response_id = firstRes.id;
+  // }
+  const finalRes = await callOpenAI(payload);
   const replyText = finalRes.output_text || '';
-  return { reply: replyText, toolCalls };
+  // return the final response id for chaining
+  return { reply: replyText, toolCalls, responseId: finalRes.id };
 }
 
 module.exports = {

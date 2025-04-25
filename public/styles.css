@@ -648,6 +648,16 @@ p.info {
   cursor: pointer;
   font-size: 0.9em;
 }
+
+/*-------------------------------------------------
+  Current Model Controls (Conversation Toggle)
+--------------------------------------------------*/
+.model-controls {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 8px;
+}
 #addRootBtn:hover {
   background: var(--hover-bg);
 }
