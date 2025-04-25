@@ -111,10 +111,23 @@ async function handleMessage(message, context) {
 
   // Helper: call the responses endpoint
   async function callOpenAI(p) {
+    // Log full request payload to OpenAI
     try {
-      return await openai.responses.create(p);
+      console.log('[mcp-wrangler] OpenAI REQUEST:', JSON.stringify(p, null, 2));
+    } catch (e) {
+      console.log('[mcp-wrangler] OpenAI REQUEST (unstringifiable):', p);
+    }
+    try {
+      const resp = await openai.responses.create(p);
+      // Log full response from OpenAI
+      try {
+        console.log('[mcp-wrangler] OpenAI RESPONSE:', JSON.stringify(resp, null, 2));
+      } catch (e) {
+        console.log('[mcp-wrangler] OpenAI RESPONSE (unstringifiable):', resp);
+      }
+      return resp;
     } catch (err) {
-      console.error('OpenAI API error:', err);
+      console.error('[mcp-wrangler] OpenAI API error:', err);
       throw err;
     }
   }
@@ -128,19 +141,28 @@ async function handleMessage(message, context) {
     return { reply: text, toolCalls: [] };
   }
 
-  // ** Function‐call turn **
-  for (const call of firstRes.output) {
-    if (call.type !== 'function_call') continue;
+  // ** Function-call turn (parallel) **
+  // 1. Gather all function_call events
+  const functionCalls = firstRes.output.filter(c => c.type === 'function_call');
 
+  // 2. Execute them in parallel
+  const callResults = await Promise.all(functionCalls.map(async call => {
     const args = JSON.parse(call.arguments || '{}');
     toolCalls.push({ name: call.name, args });
+    try {
+      const result = await client.callTool({ name: call.name, arguments: args });
+      console.log('[mcp-wrangler] DEBUG: tool call raw response:', result);
+      const raw = result.result ?? result.content;
+      const resultStr = typeof raw === 'string' ? raw : JSON.stringify(raw);
+      return { call, resultStr };
+    } catch (err) {
+      console.error('[mcp-wrangler] Error executing function_call:', call.name, err);
+      return { call, resultStr: `Error: ${err.message}` };
+    }
+  }));
 
-    // Execute the function
-    const result = await client.callTool({ name: call.name, arguments: args });
-    const raw = result.result ?? result.content;
-    const resultStr = typeof raw === 'string' ? raw : JSON.stringify(raw);
-
-    // Append the function‐call message
+  // 3. Inject each function_call and its output back into the conversation
+  for (const { call, resultStr } of callResults) {
     input.push(
       { type: 'function_call', name: call.name, arguments: call.arguments, call_id: call.call_id },
       { type: 'function_call_output', call_id: call.call_id, output: resultStr }
@@ -148,6 +170,7 @@ async function handleMessage(message, context) {
   }
 
   // ** Second pass for final reply **
+  console.log("[Tool Results]",JSON.stringify(input) )
   const finalRes = await callOpenAI({ model, input, tools });
   const replyText = finalRes.output_text || '';
   return { reply: replyText, toolCalls };

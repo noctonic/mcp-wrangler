@@ -135,6 +135,8 @@ app.post('/chat/openai', async (req, res) => {
       toolRequired: tool_required === true
     };
     const result = await chatRouter.handleMessage(message, context);
+    // Log the full chat response to the UI
+    // console.log('[mcp-wrangler] Chat response:', JSON.stringify(result, null, 2));
     res.json(result);
   } catch (err) {
     console.error('[Host] /chat/openai error:', err);

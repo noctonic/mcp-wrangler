@@ -1,3 +1,20 @@
+/* Style remove buttons for templates and roots to match add button */
+#selectedTemplates button,
+#rootsList button {
+  background: var(--accent-color);
+  color: #fff;
+  border: none;
+  padding: 4px 8px;
+  border-radius: 4px;
+  cursor: pointer;
+  font-size: 0.9em;
+  margin-left: 5px;
+  overflow: hidden;
+}
+#selectedTemplates button:hover,
+#rootsList button:hover {
+  background: var(--hover-bg);
+}
 /*-------------------------------------------------
   RIGHT PANEL
 --------------------------------------------------*/
@@ -603,6 +620,7 @@ p.info {
   display: flex;
   align-items: center;
   margin-top: 5px;
+  overflow: hidden;
 }
 .template-controls select {
   flex: 1;
@@ -631,5 +649,21 @@ p.info {
   font-size: 0.9em;
 }
 #addRootBtn:hover {
+  background: var(--hover-bg);
+}
+/* Style remove buttons for templates and roots to match add button */
+#selectedTemplates button,
+#rootsList button {
+  background: var(--accent-color);
+  color: #fff;
+  border: none;
+  padding: 4px 8px;
+  border-radius: 4px;
+  cursor: pointer;
+  font-size: 0.9em;
+  margin-left: 5px;
+}
+#selectedTemplates button:hover,
+#rootsList button:hover {
   background: var(--hover-bg);
 }
