@@ -146,54 +146,46 @@ async function handleMessage(message, context) {
     }
   }
 
-  // ** First pass **
-  const firstRes = await callOpenAI(payload);
-
+  // Handle tool function calls iteratively
+  let response = await callOpenAI(payload);
   // Gather any function_call events
-  const functionCalls = Array.isArray(firstRes.output)
-    ? firstRes.output.filter(c => c.type === 'function_call')
+  let functionCalls = Array.isArray(response.output)
+    ? response.output.filter(c => c.type === 'function_call')
     : [];
-
-  // If no function calls: pure-text turn (skip second pass)
-  if (functionCalls.length === 0) {
-    const text = firstRes.output_text || '';
-    return { reply: text, toolCalls: [], responseId: firstRes.id };
-  }
-
-  // 2. Execute them in parallel
-  const callResults = await Promise.all(functionCalls.map(async call => {
-    const args = JSON.parse(call.arguments || '{}');
-    toolCalls.push({ name: call.name, args });
-    try {
-      const result = await client.callTool({ name: call.name, arguments: args });
-      console.log('[mcp-wrangler] DEBUG: tool call raw response:', result);
-      const raw = result.result ?? result.content;
-      const resultStr = typeof raw === 'string' ? raw : JSON.stringify(raw);
-      return { call, resultStr };
-    } catch (err) {
-      console.error('[mcp-wrangler] Error executing function_call:', call.name, err);
-      return { call, resultStr: `Error: ${err.message}` };
+  // Loop while there are function calls to process
+  while (functionCalls.length > 0) {
+    // Execute all function calls in parallel
+    const callResults = await Promise.all(functionCalls.map(async call => {
+      const args = JSON.parse(call.arguments || '{}');
+      toolCalls.push({ name: call.name, args });
+      try {
+        const result = await client.callTool({ name: call.name, arguments: args });
+        console.log('[mcp-wrangler] DEBUG: tool call raw response:', result);
+        const raw = result.result ?? result.content;
+        const resultStr = typeof raw === 'string' ? raw : JSON.stringify(raw);
+        return { call, resultStr };
+      } catch (err) {
+        console.error('[mcp-wrangler] Error executing function_call:', call.name, err);
+        return { call, resultStr: `Error: ${err.message}` };
+      }
+    }));
+    // Inject each function_call and its output back into the conversation
+    for (const { call, resultStr } of callResults) {
+      input.push(
+        { type: 'function_call', name: call.name, arguments: call.arguments, call_id: call.call_id },
+        { type: 'function_call_output', call_id: call.call_id, output: resultStr }
+      );
     }
-  }));
-
-  // 3. Inject each function_call and its output back into the conversation
-  for (const { call, resultStr } of callResults) {
-    input.push(
-      { type: 'function_call', name: call.name, arguments: call.arguments, call_id: call.call_id },
-      { type: 'function_call_output', call_id: call.call_id, output: resultStr }
-    );
+    console.log("[Tool Results]", JSON.stringify(input));
+    // Call OpenAI again with updated input
+    response = await callOpenAI(payload);
+    functionCalls = Array.isArray(response.output)
+      ? response.output.filter(c => c.type === 'function_call')
+      : [];
   }
-
-  // ** Second pass for final reply **
-  console.log("[Tool Results]", JSON.stringify(input));
-  // For chaining: use firstRes.id as previous_response_id if conversation is enabled
-  // if (conversationEnabled) {
-  //   payload.previous_response_id = firstRes.id;
-  // }
-  const finalRes = await callOpenAI(payload);
-  const replyText = finalRes.output_text || '';
-  // return the final response id for chaining
-  return { reply: replyText, toolCalls, responseId: finalRes.id };
+  // Final reply
+  const replyText = response.output_text || '';
+  return { reply: replyText, toolCalls, responseId: response.id };
 }
 
 module.exports = {
